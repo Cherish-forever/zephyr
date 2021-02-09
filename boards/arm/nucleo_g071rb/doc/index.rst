@@ -100,9 +100,13 @@ The Zephyr nucleo_g071rb board configuration supports the following hardware fea
 +-----------+------------+-------------------------------------+
 | CLOCK     | on-chip    | reset and clock control             |
 +-----------+------------+-------------------------------------+
+| COUNTER   | on-chip    | rtc                                 |
++-----------+------------+-------------------------------------+
 | WATCHDOG  | on-chip    | independent watchdog                |
 +-----------+------------+-------------------------------------+
 | PWM       | on-chip    | pwm                                 |
++-----------+------------+-------------------------------------+
+| ADC       | on-chip    | adc                                 |
 +-----------+------------+-------------------------------------+
 | DAC       | on-chip    | dac                                 |
 +-----------+------------+-------------------------------------+
@@ -132,6 +136,8 @@ Default Zephyr Peripheral Mapping:
 - USER_PB   : PC13
 - LD4       : PA5
 - PWM       : PA6
+- ADC1 IN0  : PA0
+- ADC1 IN1  : PA1
 - DAC1_OUT1 : PA4
 
 For mode details please refer to `STM32 Nucleo-64 board User Manual`_.

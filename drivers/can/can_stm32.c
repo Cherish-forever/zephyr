@@ -374,9 +374,11 @@ int can_stm32_set_timing(const struct device *dev,
 	can->BTR &= ~(CAN_BTR_BRP_Msk | CAN_BTR_TS1_Msk |
 		      CAN_BTR_TS2_Msk | CAN_BTR_SJW_Msk);
 
-	can->BTR |= (((timing->phase_seg1 - 1) & 0x0F) << CAN_BTR_TS1_Pos) |
-		    (((timing->phase_seg2 - 1) & 0x07) << CAN_BTR_TS2_Pos) |
-		    (((timing->sjw        - 1) & 0x07) << CAN_BTR_SJW_Pos);
+	can->BTR |=
+	     (((timing->phase_seg1 - 1) << CAN_BTR_TS1_Pos) & CAN_BTR_TS1_Msk) |
+	     (((timing->phase_seg2 - 1) << CAN_BTR_TS2_Pos) & CAN_BTR_TS2_Msk) |
+	     (((timing->sjw        - 1) << CAN_BTR_SJW_Pos) & CAN_BTR_SJW_Msk) |
+	     (((timing->prescaler  - 1) << CAN_BTR_BRP_Pos) & CAN_BTR_BRP_Msk);
 
 	ret = can_leave_init_mode(can);
 	if (ret) {
@@ -1188,6 +1190,8 @@ static void config_can_1_irq(CAN_TypeDef *can)
 
 #include "socket_can_generic.h"
 
+static struct socket_can_context socket_can_context_1;
+
 static int socket_can_init_1(const struct device *dev)
 {
 	const struct device *can_dev = DEVICE_DT_GET(DT_NODELABEL(can1));
@@ -1277,6 +1281,8 @@ static void config_can_2_irq(CAN_TypeDef *can)
 #if defined(CONFIG_NET_SOCKETS_CAN)
 
 #include "socket_can_generic.h"
+
+static struct socket_can_context socket_can_context_2;
 
 static int socket_can_init_2(const struct device *dev)
 {

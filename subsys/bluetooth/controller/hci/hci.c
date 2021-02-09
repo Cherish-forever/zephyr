@@ -1502,6 +1502,11 @@ static void le_set_scan_enable(struct net_buf *buf, struct net_buf **evt)
 	status = ll_scan_enable(cmd->enable);
 #endif /* !CONFIG_BT_CTLR_ADV_EXT */
 
+	if (!IS_ENABLED(CONFIG_BT_CTLR_SCAN_ENABLE_STRICT) &&
+	    (status == BT_HCI_ERR_CMD_DISALLOWED)) {
+		status = BT_HCI_ERR_SUCCESS;
+	}
+
 	*evt = cmd_complete_status(status);
 }
 
@@ -1524,12 +1529,13 @@ static void le_big_create_sync(struct net_buf *buf, struct net_buf **evt)
 }
 
 
-static void le_big_terminate_sync(struct net_buf *buf, struct net_buf **evt)
+static void le_big_terminate_sync(struct net_buf *buf, struct net_buf **evt,
+				  void **node_rx)
 {
 	struct bt_hci_cp_le_big_terminate_sync *cmd = (void *)buf->data;
 	uint8_t status;
 
-	status = ll_big_sync_terminate(cmd->big_handle);
+	status = ll_big_sync_terminate(cmd->big_handle, node_rx);
 
 	*evt = cmd_complete_status(status);
 }
@@ -2449,6 +2455,27 @@ static void le_df_set_cl_cte_tx_params(struct net_buf *buf,
 
 	*evt = cmd_complete_status(status);
 }
+
+static void le_df_set_cl_cte_enable(struct net_buf *buf, struct net_buf **evt)
+{
+	struct bt_hci_cp_le_set_cl_cte_tx_enable *cmd = (void *)buf->data;
+	uint8_t status;
+	uint8_t handle;
+
+	if (adv_cmds_ext_check(evt)) {
+		return;
+	}
+
+	status = ll_adv_set_by_hci_handle_get(cmd->handle, &handle);
+	if (status) {
+		*evt = cmd_complete_status(status);
+		return;
+	}
+
+	status = ll_df_set_cl_cte_tx_enable(handle, cmd->cte_enable);
+
+	*evt = cmd_complete_status(status);
+}
 #endif /* CONFIG_BT_CTLR_DF_ADV_CTE_TX */
 
 #if IS_ENABLED(CONFIG_BT_CTLR_DF_CONN_CTE_RSP)
@@ -2951,6 +2978,11 @@ static void le_set_ext_scan_enable(struct net_buf *buf, struct net_buf **evt)
 
 	status = ll_scan_enable(cmd->enable, cmd->duration, cmd->period);
 
+	if (!IS_ENABLED(CONFIG_BT_CTLR_SCAN_ENABLE_STRICT) &&
+	    (status == BT_HCI_ERR_CMD_DISALLOWED)) {
+		status = BT_HCI_ERR_SUCCESS;
+	}
+
 	*evt = cmd_complete_status(status);
 }
 
@@ -3222,7 +3254,7 @@ static int controller_cmd_handle(uint16_t  ocf, struct net_buf *cmd,
 		break;
 
 	case BT_OCF(BT_HCI_OP_LE_BIG_TERMINATE_SYNC):
-		le_big_terminate_sync(cmd, evt);
+		le_big_terminate_sync(cmd, evt, node_rx);
 		break;
 #endif /* CONFIG_BT_CTLR_SYNC_ISO */
 #endif /* CONFIG_BT_OBSERVER */
@@ -3504,10 +3536,13 @@ static int controller_cmd_handle(uint16_t  ocf, struct net_buf *cmd,
 		le_read_tx_power(cmd, evt);
 		break;
 
-#if defined(CONFIG_BT_CTLR_DF)
+#if IS_ENABLED(CONFIG_BT_CTLR_DF)
 #if IS_ENABLED(CONFIG_BT_CTLR_DF_ADV_CTE_TX)
 	case BT_OCF(BT_HCI_OP_LE_SET_CL_CTE_TX_PARAMS):
 		le_df_set_cl_cte_tx_params(cmd, evt);
+		break;
+	case BT_OCF(BT_HCI_OP_LE_SET_CL_CTE_TX_ENABLE):
+		le_df_set_cl_cte_enable(cmd, evt);
 		break;
 #endif /* CONFIG_BT_CTLR_DF_ADV_CTE_TX */
 	case BT_OCF(BT_HCI_OP_LE_READ_ANT_INFO):
@@ -5696,13 +5731,17 @@ static void encode_control(struct node_rx_pdu *node_rx,
 
 #if defined(CONFIG_BT_CTLR_PROFILE_ISR)
 	case NODE_RX_TYPE_PROFILE:
-		BT_INFO("l: %d, %d, %d; t: %d, %d, %d.",
+		BT_INFO("l: %u, %u, %u; t: %u, %u, %u; cpu: %u, %u, %u, %u.",
 			pdu_data->profile.lcur,
 			pdu_data->profile.lmin,
 			pdu_data->profile.lmax,
 			pdu_data->profile.cur,
 			pdu_data->profile.min,
-			pdu_data->profile.max);
+			pdu_data->profile.max,
+			pdu_data->profile.radio,
+			pdu_data->profile.lll,
+			pdu_data->profile.ull_high,
+			pdu_data->profile.ull_low);
 		return;
 #endif /* CONFIG_BT_CTLR_PROFILE_ISR */
 
@@ -5774,7 +5813,7 @@ static void le_remote_feat_complete(uint8_t status, struct pdu_data *pdu_data,
 		return;
 	}
 
-	sep = meta_evt(buf, BT_HCI_EV_LE_REMOTE_FEAT_COMPLETE, sizeof(*sep));
+	sep = meta_evt(buf, BT_HCI_EVT_LE_REMOTE_FEAT_COMPLETE, sizeof(*sep));
 
 	sep->status = status;
 	sep->handle = sys_cpu_to_le16(handle);

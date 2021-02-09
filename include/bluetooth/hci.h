@@ -803,15 +803,6 @@ struct bt_hci_cp_le_set_random_address {
 	bt_addr_t bdaddr;
 } __packed;
 
-/* LE Advertising Types (LE Advertising Parameters Set)*/
-#define BT_LE_ADV_IND                  (__DEPRECATED_MACRO 0x00)
-#define BT_LE_ADV_DIRECT_IND           (__DEPRECATED_MACRO 0x01)
-#define BT_LE_ADV_SCAN_IND             (__DEPRECATED_MACRO 0x02)
-#define BT_LE_ADV_NONCONN_IND          (__DEPRECATED_MACRO 0x03)
-#define BT_LE_ADV_DIRECT_IND_LOW_DUTY  (__DEPRECATED_MACRO 0x04)
-/* LE Advertising PDU Types. */
-#define BT_LE_ADV_SCAN_RSP             (__DEPRECATED_MACRO 0x04)
-
 #define BT_HCI_ADV_IND                          0x00
 #define BT_HCI_ADV_DIRECT_IND                   0x01
 #define BT_HCI_ADV_SCAN_IND                     0x02
@@ -1462,6 +1453,12 @@ struct bt_hci_cp_le_write_rf_path_comp {
 struct bt_hci_cp_le_set_privacy_mode {
 	bt_addr_le_t id_addr;
 	uint8_t         mode;
+} __packed;
+
+#define BT_HCI_OP_LE_SET_CL_CTE_TX_ENABLE      BT_OP(BT_OGF_LE, 0x0052)
+struct bt_hci_cp_le_set_cl_cte_tx_enable {
+	uint8_t handle;
+	uint8_t cte_enable;
 } __packed;
 
 /* Min and max Constant Tone Extension length in 8us units */
@@ -2164,7 +2161,7 @@ struct bt_hci_evt_le_conn_update_complete {
 	uint16_t supv_timeout;
 } __packed;
 
-#define BT_HCI_EV_LE_REMOTE_FEAT_COMPLETE       0x04
+#define BT_HCI_EVT_LE_REMOTE_FEAT_COMPLETE      0x04
 struct bt_hci_evt_le_remote_feat_complete {
 	uint8_t  status;
 	uint16_t handle;

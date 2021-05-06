@@ -91,7 +91,8 @@ config BT_HCI_TX_STACK_SIZE
 	help
 	  Stack size needed for executing bt_send with specified driver.
 	  NOTE: This is an advanced setting and should not be changed unless
-	  absolutely necessary
+	  absolutely necessary.  To change this you must first select
+	  BT_HCI_TX_STACK_SIZE_WITH_PROMPT.
 
 config BT_HCI_TX_STACK_SIZE_WITH_PROMPT
 	bool "Override HCI Tx thread stack size"
@@ -100,7 +101,7 @@ config BT_HCI_ECC_STACK_SIZE
 	# NOTE: This value is derived from other symbols and should only be
 	# changed if required by architecture
 	int "HCI ECC thread stack size"
-	default 1100
+	default 1140
 	help
 	  NOTE: This is an advanced setting and should not be changed unless
 	  absolutely necessary
@@ -118,12 +119,23 @@ config BT_HCI_RESERVE
 	default 1 if BT_SPI
 	default 1 if BT_STM32_IPM
 	default 1 if BT_USERCHAN
+	default 1 if BT_ESP32
 	# Even if no driver is selected the following default is still
 	# needed e.g. for unit tests.
 	default 0
 	help
 	  Headroom that the driver needs for sending and receiving buffers. Add a
 	  new 'default' entry for each new driver.
+
+config BT_HCI_ACL_DATA_SIZE
+	int
+	prompt "ACL data buffer size" if !BT_CTLR
+	depends on BT_HCI_RAW
+	range 27 251
+	default BT_CTLR_DATA_LENGTH_MAX if BT_CTLR_DATA_LENGTH
+	default 27
+	help
+	  Maximum ACL data payload in HCI packets, excluding HCI header.
 
 config BT_RECV_IS_RX_THREAD
 	# Hidden option set by the HCI driver to indicate that there's
@@ -163,8 +175,6 @@ config BT_DRIVER_RX_HIGH_PRIO
 
 if BT_HCI_HOST
 
-source "subsys/bluetooth/host/audio/Kconfig"
-
 config BT_HOST_CRYPTO
 	# Hidden option that compiles in random number generation and AES
 	# encryption support using TinyCrypt library if this is not provided
@@ -197,6 +207,7 @@ config BT_SETTINGS
 if BT_SETTINGS
 config BT_SETTINGS_CCC_LAZY_LOADING
 	bool "Load CCC values from settings when peer connects"
+	depends on BT_CONN
 	default y
 	help
 	  Load Client Configuration Characteristic setting right after a bonded
@@ -206,6 +217,7 @@ config BT_SETTINGS_CCC_LAZY_LOADING
 
 config BT_SETTINGS_CCC_STORE_ON_WRITE
 	bool "Store CCC value immediately after it has been written"
+	depends on BT_CONN
 	help
 	  Store Client Configuration Characteristic value right after it has
 	  been updated.
@@ -431,7 +443,6 @@ config BT_FIXED_PASSKEY
 
 config BT_USE_DEBUG_KEYS
 	bool "Enable Security Manager Debug Mode"
-	depends on BT_TINYCRYPT_ECC
 	help
 	  This option places Security Manager in a Debug Mode. In this mode
 	  predefined Diffie-Hellman private/public key pair is used as described
@@ -500,6 +511,15 @@ config BT_KEYS_SAVE_AGING_COUNTER_ON_PAIRING
 	  With this option enabled, aging counter will be stored in settings every
 	  time a successful pairing occurs. This increases flash wear out but offers
 	  a more correct finding of the oldest unused pairing info.
+
+config BT_SMP_MIN_ENC_KEY_SIZE
+	int
+	prompt "Minimum encryption key size accepted in octets" if !BT_SMP_SC_ONLY
+	range 7 16
+	default 7
+	default 16 if BT_SMP_SC_ONLY
+	help
+	  This option sets the minimum encryption key size accepted during pairing.
 
 endif # BT_SMP
 
@@ -668,6 +688,12 @@ config BT_DEBUG_CONN
 	  This option enables debug support for Bluetooth
 	  connection handling.
 
+config BT_DEBUG_ISO
+	bool "ISO channel debug"
+	help
+	  Use this option to enable ISO channels debug logs for the
+	  Bluetooth Audio functionality.
+
 config BT_DEBUG_KEYS
 	bool "Bluetooth security keys debug"
 	depends on BT_HCI_HOST
@@ -749,6 +775,17 @@ config BT_DEBUG_SERVICE
 	  Services.
 
 endif # BT_DEBUG
+
+config BT_LOG_SNIFFER_INFO
+	bool "Bluetooth log information for sniffer"
+	help
+	  This option enables the Bluetooth stack to log information such as
+	  DH private key and LTK keys, which can be used by sniffers to decrypt
+	  the connection without the use of Debug keys.
+
+	  WARNING: This option prints out private security keys such as
+	  the Long Term Key.
+	  Use of this feature in production is strongly discouraged
 
 config BT_TESTING
 	bool "Bluetooth Testing"

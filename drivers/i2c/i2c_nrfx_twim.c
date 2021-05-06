@@ -127,6 +127,17 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 			}
 		}
 
+		if (cur_xfer.primary_length == 0) {
+			/* For a zero-length transfer, the STOP task will not
+			 * be triggered automatically by the shortcut with the
+			 * event that signals the transfer end. It needs to be
+			 * done "manually" to prevent the driver getting stuck
+			 * after the address byte is acknowledged.
+			 */
+			nrf_twim_task_trigger(get_dev_config(dev)->twim.p_twim,
+					      NRF_TWIM_TASK_STOP);
+		}
+
 		ret = k_sem_take(&(get_dev_data(dev)->completion_sync),
 				 I2C_TRANSFER_TIMEOUT_MSEC);
 		if (ret != 0) {
@@ -148,7 +159,7 @@ static int i2c_nrfx_twim_transfer(const struct device *dev,
 		res = get_dev_data(dev)->res;
 
 		if (res != NRFX_SUCCESS) {
-			LOG_ERR("Error %d occurred for message %d", res, i);
+			LOG_ERR("Error 0x%08X occurred for message %d", res, i);
 			ret = -EIO;
 			break;
 		}
@@ -245,7 +256,7 @@ static int init_twim(const struct device *dev)
 	}
 
 #ifdef CONFIG_PM_DEVICE
-	get_dev_data(dev)->pm_state = DEVICE_PM_ACTIVE_STATE;
+	get_dev_data(dev)->pm_state = PM_DEVICE_ACTIVE_STATE;
 #endif
 
 	return 0;
@@ -254,17 +265,17 @@ static int init_twim(const struct device *dev)
 #ifdef CONFIG_PM_DEVICE
 static int twim_nrfx_pm_control(const struct device *dev,
 				uint32_t ctrl_command,
-				void *context, device_pm_cb cb, void *arg)
+				void *context, pm_device_cb cb, void *arg)
 {
 	int ret = 0;
 	uint32_t pm_current_state = get_dev_data(dev)->pm_state;
 
-	if (ctrl_command == DEVICE_PM_SET_POWER_STATE) {
+	if (ctrl_command == PM_DEVICE_STATE_SET) {
 		uint32_t new_state = *((const uint32_t *)context);
 
 		if (new_state != pm_current_state) {
 			switch (new_state) {
-			case DEVICE_PM_ACTIVE_STATE:
+			case PM_DEVICE_ACTIVE_STATE:
 				init_twim(dev);
 				if (get_dev_data(dev)->dev_config) {
 					i2c_nrfx_twim_configure(
@@ -273,10 +284,10 @@ static int twim_nrfx_pm_control(const struct device *dev,
 				}
 				break;
 
-			case DEVICE_PM_LOW_POWER_STATE:
-			case DEVICE_PM_SUSPEND_STATE:
-			case DEVICE_PM_OFF_STATE:
-				if (pm_current_state != DEVICE_PM_ACTIVE_STATE) {
+			case PM_DEVICE_LOW_POWER_STATE:
+			case PM_DEVICE_SUSPEND_STATE:
+			case PM_DEVICE_OFF_STATE:
+				if (pm_current_state != PM_DEVICE_ACTIVE_STATE) {
 					break;
 				}
 				nrfx_twim_uninit(&get_dev_config(dev)->twim);
@@ -290,7 +301,7 @@ static int twim_nrfx_pm_control(const struct device *dev,
 			}
 		}
 	} else {
-		__ASSERT_NO_MSG(ctrl_command == DEVICE_PM_GET_POWER_STATE);
+		__ASSERT_NO_MSG(ctrl_command == PM_DEVICE_STATE_GET);
 		*((uint32_t *)context) = get_dev_data(dev)->pm_state;
 	}
 

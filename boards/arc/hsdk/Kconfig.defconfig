@@ -33,17 +33,22 @@ config SPI_DW_ARC_AUX_REGS
 config SPI_DW_ACCESS_WORD_ONLY
 	default y
 
-config SPI_0
-	default y
-
-config SPI_1
-	default y
-
-config SPI_2
-	default y
-
 endif # SPI_DW
 
 endif # SPI
+
+if I2C
+
+config I2C_DW
+	default y
+
+if I2C_DW
+
+config I2C_DW_CLOCK_SPEED
+	default 200
+
+endif #I2C_DW
+
+endif #I2C
 
 endif # BOARD_HSDK

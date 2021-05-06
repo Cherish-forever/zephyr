@@ -67,6 +67,20 @@ K_KERNEL_STACK_DEFINE(esp_workq_stack,
 
 struct esp_data esp_driver_data;
 
+static void esp_configure_hostname(struct esp_data *data)
+{
+#if defined(CONFIG_NET_HOSTNAME_ENABLE)
+	char cmd[sizeof("AT+CWHOSTNAME=\"\"") + NET_HOSTNAME_MAX_LEN];
+
+	snprintk(cmd, sizeof(cmd), "AT+CWHOSTNAME=\"%s\"", net_hostname_get());
+	cmd[sizeof(cmd) - 1] = '\0';
+
+	esp_cmd_send(data, NULL, 0, cmd, ESP_CMD_TIMEOUT);
+#else
+	ARG_UNUSED(data);
+#endif
+}
+
 static inline uint8_t esp_mode_from_flags(struct esp_data *data)
 {
 	uint8_t flags = data->flags;
@@ -111,10 +125,25 @@ static int esp_mode_switch(struct esp_data *data, uint8_t mode)
 static int esp_mode_switch_if_needed(struct esp_data *data)
 {
 	uint8_t new_mode = esp_mode_from_flags(data);
+	uint8_t old_mode = data->mode;
+	int err;
 
-	if (data->mode != new_mode) {
-		data->mode = new_mode;
-		return esp_mode_switch(data, new_mode);
+	if (old_mode == new_mode) {
+		return 0;
+	}
+
+	data->mode = new_mode;
+
+	err = esp_mode_switch(data, new_mode);
+	if (err) {
+		return err;
+	}
+
+	if (!(old_mode & ESP_MODE_STA) && (new_mode & ESP_MODE_STA)) {
+		/*
+		 * Hostname change is applied only when STA is enabled.
+		 */
+		esp_configure_hostname(data);
 	}
 
 	return 0;
@@ -273,17 +302,7 @@ static void esp_dns_work(struct k_work *work)
 	}
 
 	dnsctx = dns_resolve_get_default();
-	for (i = 0; i < CONFIG_DNS_NUM_CONCUR_QUERIES; i++) {
-		if (!dnsctx->queries[i].cb) {
-			continue;
-		}
-
-		dns_resolve_cancel(dnsctx, dnsctx->queries[i].id);
-	}
-
-	dns_resolve_close(dnsctx);
-
-	err = dns_resolve_init(dnsctx, NULL, dns_servers);
+	err = dns_resolve_reconfigure(dnsctx, NULL, dns_servers);
 	if (err) {
 		LOG_ERR("Could not set DNS servers: %d", err);
 	}
@@ -414,8 +433,8 @@ static void esp_ip_addr_work(struct k_work *work)
 			   ESP_CMD_TIMEOUT);
 	if (ret < 0) {
 		LOG_WRN("Failed to query IP settings: ret %d", ret);
-		k_delayed_work_submit_to_queue(&dev->workq, &dev->ip_addr_work,
-					       K_SECONDS(5));
+		k_work_reschedule_for_queue(&dev->workq, &dev->ip_addr_work,
+					    K_SECONDS(5));
 		return;
 	}
 
@@ -442,8 +461,8 @@ MODEM_CMD_DEFINE(on_cmd_got_ip)
 	struct esp_data *dev = CONTAINER_OF(data, struct esp_data,
 					    cmd_handler_data);
 
-	k_delayed_work_submit_to_queue(&dev->workq, &dev->ip_addr_work,
-				       K_SECONDS(1));
+	k_work_reschedule_for_queue(&dev->workq, &dev->ip_addr_work,
+				    K_SECONDS(1));
 
 	return 0;
 }
@@ -877,20 +896,6 @@ static int esp_mgmt_ap_disable(const struct device *dev)
 	return esp_mode_flags_clear(data, EDF_AP_ENABLED);
 }
 
-static void esp_configure_hostname(struct esp_data *data)
-{
-#if defined(CONFIG_NET_HOSTNAME_ENABLE)
-	char cmd[sizeof("AT+CWHOSTNAME=\"\"") + NET_HOSTNAME_MAX_LEN];
-
-	snprintk(cmd, sizeof(cmd), "AT+CWHOSTNAME=\"%s\"", net_hostname_get());
-	cmd[sizeof(cmd) - 1] = '\0';
-
-	esp_cmd_send(data, NULL, 0, cmd, ESP_CMD_TIMEOUT);
-#else
-	ARG_UNUSED(data);
-#endif
-}
-
 static void esp_init_work(struct k_work *work)
 {
 	struct esp_data *dev;
@@ -981,7 +986,16 @@ static void esp_init_work(struct k_work *work)
 	net_if_set_link_addr(dev->net_iface, dev->mac_addr,
 			     sizeof(dev->mac_addr), NET_LINK_ETHERNET);
 
-	esp_configure_hostname(dev);
+	if (IS_ENABLED(CONFIG_WIFI_ESP_AT_VERSION_1_7)) {
+		/* This is the mode entered in above setup commands */
+		dev->mode = ESP_MODE_STA;
+
+		/*
+		 * In case of ESP 1.7 this is the first time CWMODE is entered
+		 * STA mode, so request hostname change now.
+		 */
+		esp_configure_hostname(dev);
+	}
 
 	LOG_INF("ESP Wi-Fi ready");
 
@@ -1063,7 +1077,7 @@ static int esp_init(const struct device *dev)
 	k_sem_init(&data->sem_if_up, 0, 1);
 
 	k_work_init(&data->init_work, esp_init_work);
-	k_delayed_work_init(&data->ip_addr_work, esp_ip_addr_work);
+	k_work_init_delayable(&data->ip_addr_work, esp_ip_addr_work);
 	k_work_init(&data->scan_work, esp_mgmt_scan_work);
 	k_work_init(&data->connect_work, esp_mgmt_connect_work);
 	k_work_init(&data->mode_switch_work, esp_mode_switch_work);
@@ -1074,9 +1088,10 @@ static int esp_init(const struct device *dev)
 	esp_socket_init(data);
 
 	/* initialize the work queue */
-	k_work_q_start(&data->workq, esp_workq_stack,
-		       K_KERNEL_STACK_SIZEOF(esp_workq_stack),
-		       K_PRIO_COOP(CONFIG_WIFI_ESP_WORKQ_THREAD_PRIORITY));
+	k_work_queue_start(&data->workq, esp_workq_stack,
+			   K_KERNEL_STACK_SIZEOF(esp_workq_stack),
+			   K_PRIO_COOP(CONFIG_WIFI_ESP_WORKQ_THREAD_PRIORITY),
+			   NULL);
 	k_thread_name_set(&data->workq.thread, "esp_workq");
 
 	/* cmd handler */
@@ -1130,7 +1145,7 @@ error:
 	return ret;
 }
 
-NET_DEVICE_OFFLOAD_INIT(wifi_esp, CONFIG_WIFI_ESP_NAME,
-			esp_init, device_pm_control_nop, &esp_driver_data, NULL,
-			CONFIG_WIFI_INIT_PRIORITY, &esp_api,
-			ESP_MTU);
+NET_DEVICE_DT_INST_OFFLOAD_DEFINE(0, esp_init, NULL,
+				  &esp_driver_data, NULL,
+				  CONFIG_WIFI_INIT_PRIORITY, &esp_api,
+				  ESP_MTU);

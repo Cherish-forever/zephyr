@@ -66,6 +66,10 @@ void z_timer_expiration_handler(struct _timeout *t)
 		timer->expiry_fn(timer);
 	}
 
+	if (!IS_ENABLED(CONFIG_MULTITHREADING)) {
+		return;
+	}
+
 	thread = z_waitq_head(&timer->wait_q);
 
 	if (thread == NULL) {
@@ -82,9 +86,9 @@ void z_timer_expiration_handler(struct _timeout *t)
 	 */
 	z_unpend_thread_no_timeout(thread);
 
-	z_ready_thread(thread);
-
 	arch_thread_return_value_set(thread, 0);
+
+	z_ready_thread(thread);
 }
 
 
@@ -96,7 +100,10 @@ void k_timer_init(struct k_timer *timer,
 	timer->stop_fn = stop_fn;
 	timer->status = 0U;
 
-	z_waitq_init(&timer->wait_q);
+	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
+		z_waitq_init(&timer->wait_q);
+	}
+
 	z_init_timeout(&timer->timeout);
 	SYS_TRACING_OBJ_INIT(k_timer, timer);
 
@@ -126,7 +133,8 @@ void z_impl_k_timer_start(struct k_timer *timer, k_timeout_t duration,
 	 * argument the same way k_sleep() does), but historical.  The
 	 * timer_api test relies on this behavior.
 	 */
-	if (period.ticks != 0 && Z_TICK_ABS(period.ticks) < 0) {
+	if (!K_TIMEOUT_EQ(period, K_FOREVER) && period.ticks != 0 &&
+	    Z_TICK_ABS(period.ticks) < 0) {
 		period.ticks = MAX(period.ticks - 1, 1);
 	}
 	if (Z_TICK_ABS(duration.ticks) < 0) {
@@ -164,11 +172,13 @@ void z_impl_k_timer_stop(struct k_timer *timer)
 		timer->stop_fn(timer);
 	}
 
-	struct k_thread *pending_thread = z_unpend1_no_timeout(&timer->wait_q);
+	if (IS_ENABLED(CONFIG_MULTITHREADING)) {
+		struct k_thread *pending_thread = z_unpend1_no_timeout(&timer->wait_q);
 
-	if (pending_thread != NULL) {
-		z_ready_thread(pending_thread);
-		z_reschedule_unlocked();
+		if (pending_thread != NULL) {
+			z_ready_thread(pending_thread);
+			z_reschedule_unlocked();
+		}
 	}
 }
 
@@ -204,6 +214,29 @@ static inline uint32_t z_vrfy_k_timer_status_get(struct k_timer *timer)
 uint32_t z_impl_k_timer_status_sync(struct k_timer *timer)
 {
 	__ASSERT(!arch_is_in_isr(), "");
+
+	if (!IS_ENABLED(CONFIG_MULTITHREADING)) {
+		uint32_t result;
+
+		do {
+			k_spinlock_key_t key = k_spin_lock(&lock);
+
+			if (!z_is_inactive_timeout(&timer->timeout)) {
+				result = *(volatile uint32_t *)&timer->status;
+				timer->status = 0U;
+				k_spin_unlock(&lock, key);
+				if (result > 0) {
+					break;
+				}
+			} else {
+				result = timer->status;
+				k_spin_unlock(&lock, key);
+				break;
+			}
+		} while (true);
+
+		return result;
+	}
 
 	k_spinlock_key_t key = k_spin_lock(&lock);
 	uint32_t result = timer->status;

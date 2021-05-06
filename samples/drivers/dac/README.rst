@@ -13,6 +13,10 @@ Building and Running
 
 The DAC output is defined in the board's devicetree and pinmux file.
 
+The board's :ref:`/zephyr,user <dt-zephyr-user>` node must have ``dac``,
+``dac-channel-id``, and ``dac-resolution`` properties set. See the predefined
+overlays in :zephyr_file:`samples/drivers/dac/boards` for examples.
+
 Building and Running for ST Nucleo L073RZ
 =========================================
 The sample can be built and executed for the
@@ -32,6 +36,28 @@ The sample can be built and executed for the
 .. zephyr-app-commands::
    :zephyr-app: samples/drivers/dac
    :board: nucleo_l152re
+   :goals: build flash
+   :compact:
+
+Building and Running for ST Nucleo F767ZI
+=========================================
+The sample can be built and executed for the
+:ref:`nucleo_f767zi_board` as follows:
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/drivers/dac
+   :board: nucleo_f767zi
+   :goals: build flash
+   :compact:
+
+Building and Running for ST Nucleo F429ZI
+=========================================
+The sample can be built and executed for the
+:ref:`nucleo_f429zi_board` as follows:
+
+.. zephyr-app-commands::
+   :zephyr-app: samples/drivers/dac
+   :board: nucleo_f429zi
    :goals: build flash
    :compact:
 

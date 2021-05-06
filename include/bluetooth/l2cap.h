@@ -98,7 +98,8 @@ struct bt_l2cap_chan {
 	sys_snode_t			node;
 	bt_l2cap_chan_destroy_t		destroy;
 	/* Response Timeout eXpired (RTX) timer */
-	struct k_delayed_work		rtx_work;
+	struct k_work_delayable		rtx_work;
+	struct k_work_sync              rtx_sync;
 	ATOMIC_DEFINE(status, BT_L2CAP_NUM_STATUS);
 
 #if defined(CONFIG_BT_L2CAP_DYNAMIC_CHANNEL)
@@ -292,7 +293,7 @@ struct bt_l2cap_server {
 	 */
 	uint16_t			psm;
 
-	/** Required minimim security level */
+	/** Required minimum security level */
 	bt_security_t		sec_level;
 
 	/** @brief Server accept callback
@@ -401,6 +402,9 @@ int bt_l2cap_chan_disconnect(struct bt_l2cap_chan *chan);
  *  be queued and sent as and when credits are received from peer.
  *  Regarding to first input parameter, to get details see reference description
  *  to bt_l2cap_chan_connect() API above.
+ *
+ *  @note Buffer ownership is transferred to the stack in case of success, in
+ *  case of an error the caller retains the ownership of the buffer.
  *
  *  @return Bytes sent in case of success or negative value in case of error.
  */

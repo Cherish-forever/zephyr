@@ -29,7 +29,7 @@ SYS_INIT(statics_init, PRE_KERNEL_1, CONFIG_KERNEL_INIT_PRIORITY_OBJECTS);
 void *k_heap_aligned_alloc(struct k_heap *h, size_t align, size_t bytes,
 			k_timeout_t timeout)
 {
-	int64_t now, end = z_timeout_end_calc(timeout);
+	int64_t now, end = sys_clock_timeout_end_calc(timeout);
 	void *ret = NULL;
 	k_spinlock_key_t key = k_spin_lock(&h->lock);
 
@@ -38,8 +38,9 @@ void *k_heap_aligned_alloc(struct k_heap *h, size_t align, size_t bytes,
 	while (ret == NULL) {
 		ret = sys_heap_aligned_alloc(&h->heap, align, bytes);
 
-		now = z_tick_get();
-		if ((ret != NULL) || ((end - now) <= 0)) {
+		now = sys_clock_tick_get();
+		if (!IS_ENABLED(CONFIG_MULTITHREADING) ||
+		    (ret != NULL) || ((end - now) <= 0)) {
 			break;
 		}
 
@@ -58,7 +59,7 @@ void k_heap_free(struct k_heap *h, void *mem)
 
 	sys_heap_free(&h->heap, mem);
 
-	if (z_unpend_all(&h->wait_q) != 0) {
+	if (IS_ENABLED(CONFIG_MULTITHREADING) && z_unpend_all(&h->wait_q) != 0) {
 		z_reschedule(&h->lock, key);
 	} else {
 		k_spin_unlock(&h->lock, key);

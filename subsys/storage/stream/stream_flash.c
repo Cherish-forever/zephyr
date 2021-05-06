@@ -16,6 +16,62 @@ LOG_MODULE_REGISTER(LOG_MODULE_NAME, CONFIG_STREAM_FLASH_LOG_LEVEL);
 
 #include <storage/stream_flash.h>
 
+#ifdef CONFIG_STREAM_FLASH_PROGRESS
+#include <settings/settings.h>
+
+static int settings_direct_loader(const char *key, size_t len,
+				  settings_read_cb read_cb, void *cb_arg,
+				  void *param)
+{
+	struct stream_flash_ctx *ctx = (struct stream_flash_ctx *) param;
+
+	/* Handle the subtree if it is an exact key match. */
+	if (settings_name_next(key, NULL) == 0) {
+		size_t bytes_written = 0;
+		ssize_t len = read_cb(cb_arg, &bytes_written,
+				      sizeof(bytes_written));
+
+		if (len != sizeof(ctx->bytes_written)) {
+			LOG_ERR("Unable to read bytes_written from storage");
+			return len;
+		}
+
+		/* Check that loaded progress is not outdated. */
+		if (bytes_written >= ctx->bytes_written) {
+			ctx->bytes_written = bytes_written;
+		} else {
+			LOG_WRN("Loaded outdated bytes_written %zu < %zu",
+				bytes_written, ctx->bytes_written);
+			return 0;
+		}
+
+#ifdef CONFIG_STREAM_FLASH_ERASE
+		int rc;
+		struct flash_pages_info page;
+		off_t offset = (off_t) (ctx->offset + ctx->bytes_written) - 1;
+
+		/* Update the last erased page to avoid deleting already
+		 * written data.
+		 */
+		if (ctx->bytes_written > 0) {
+			rc = flash_get_page_info_by_offs(ctx->fdev, offset,
+							 &page);
+			if (rc != 0) {
+				LOG_ERR("Error %d while getting page info", rc);
+				return rc;
+			}
+			ctx->last_erased_page_start_offset = page.start_offset;
+		} else {
+			ctx->last_erased_page_start_offset = -1;
+		}
+#endif /* CONFIG_STREAM_FLASH_ERASE */
+	}
+
+	return 0;
+}
+
+#endif /* CONFIG_STREAM_FLASH_PROGRESS */
+
 #ifdef CONFIG_STREAM_FLASH_ERASE
 
 int stream_flash_erase_page(struct stream_flash_ctx *ctx, off_t off)
@@ -33,15 +89,14 @@ int stream_flash_erase_page(struct stream_flash_ctx *ctx, off_t off)
 		return 0;
 	}
 
-	ctx->last_erased_page_start_offset = page.start_offset;
 	LOG_DBG("Erasing page at offset 0x%08lx", (long)page.start_offset);
 
-	flash_write_protection_set(ctx->fdev, false);
 	rc = flash_erase(ctx->fdev, page.start_offset, page.size);
-	flash_write_protection_set(ctx->fdev, true);
 
 	if (rc != 0) {
 		LOG_ERR("Error %d while erasing page", rc);
+	} else {
+		ctx->last_erased_page_start_offset = page.start_offset;
 	}
 
 	return rc;
@@ -55,10 +110,11 @@ static int flash_sync(struct stream_flash_ctx *ctx)
 	size_t write_addr = ctx->offset + ctx->bytes_written;
 
 
+	if (ctx->buf_bytes == 0) {
+		return 0;
+	}
+
 	if (IS_ENABLED(CONFIG_STREAM_FLASH_ERASE)) {
-		if (ctx->buf_bytes == 0) {
-			return 0;
-		}
 
 		rc = stream_flash_erase_page(ctx,
 					     write_addr + ctx->buf_bytes - 1);
@@ -69,9 +125,7 @@ static int flash_sync(struct stream_flash_ctx *ctx)
 		}
 	}
 
-	flash_write_protection_set(ctx->fdev, false);
 	rc = flash_write(ctx->fdev, write_addr, ctx->buf, ctx->buf_bytes);
-	flash_write_protection_set(ctx->fdev, true);
 
 	if (rc != 0) {
 		LOG_ERR("flash_write error %d offset=0x%08zx", rc,
@@ -97,6 +151,7 @@ static int flash_sync(struct stream_flash_ctx *ctx)
 		rc = ctx->callback(ctx->buf, ctx->buf_bytes, write_addr);
 		if (rc != 0) {
 			LOG_ERR("callback failed: %d", rc);
+			return rc;
 		}
 	}
 
@@ -149,19 +204,7 @@ int stream_flash_buffered_write(struct stream_flash_ctx *ctx, const uint8_t *dat
 		fill_length = flash_get_write_block_size(ctx->fdev);
 		if (ctx->buf_bytes % fill_length) {
 			fill_length -= ctx->buf_bytes % fill_length;
-			/*
-			 * Leverage the fact that unwritten memory
-			 * should be erased in order to get the erased
-			 * byte-value.
-			 */
-			rc = flash_read(ctx->fdev,
-					ctx->offset + ctx->bytes_written,
-					(void *)&filler,
-					1);
-
-			if (rc != 0) {
-				return rc;
-			}
+			filler = flash_get_parameters(ctx->fdev)->erase_value;
 
 			memset(ctx->buf + ctx->buf_bytes, filler, fill_length);
 			ctx->buf_bytes += fill_length;
@@ -170,7 +213,11 @@ int stream_flash_buffered_write(struct stream_flash_ctx *ctx, const uint8_t *dat
 		}
 
 		rc = flash_sync(ctx);
-		ctx->bytes_written -= fill_length;
+		if (rc == 0) {
+			ctx->bytes_written -= fill_length;
+		} else {
+			ctx->buf_bytes -= fill_length;
+		}
 	}
 
 	return rc;
@@ -209,6 +256,15 @@ int stream_flash_init(struct stream_flash_ctx *ctx, const struct device *fdev,
 	if (!ctx || !fdev || !buf) {
 		return -EFAULT;
 	}
+
+#ifdef CONFIG_STREAM_FLASH_PROGRESS
+	int rc = settings_subsys_init();
+
+	if (rc != 0) {
+		LOG_ERR("Error %d initializing settings subsystem", rc);
+		return rc;
+	}
+#endif
 
 	struct _inspect_flash inspect_flash_ctx = {
 		.buf_len = buf_len,
@@ -250,3 +306,62 @@ int stream_flash_init(struct stream_flash_ctx *ctx, const struct device *fdev,
 
 	return 0;
 }
+
+#ifdef CONFIG_STREAM_FLASH_PROGRESS
+
+int stream_flash_progress_load(struct stream_flash_ctx *ctx,
+			       const char *settings_key)
+{
+	if (!ctx || !settings_key) {
+		return -EFAULT;
+	}
+
+	int rc = settings_load_subtree_direct(settings_key,
+					      settings_direct_loader,
+					      (void *) ctx);
+
+	if (rc != 0) {
+		LOG_ERR("Error %d while loading progress for \"%s\"",
+			rc, settings_key);
+	}
+
+	return rc;
+}
+
+int stream_flash_progress_save(struct stream_flash_ctx *ctx,
+			       const char *settings_key)
+{
+	if (!ctx || !settings_key) {
+		return -EFAULT;
+	}
+
+	int rc = settings_save_one(settings_key,
+				   &ctx->bytes_written,
+				   sizeof(ctx->bytes_written));
+
+	if (rc != 0) {
+		LOG_ERR("Error %d while storing progress for \"%s\"",
+			rc, settings_key);
+	}
+
+	return rc;
+}
+
+int stream_flash_progress_clear(struct stream_flash_ctx *ctx,
+				const char *settings_key)
+{
+	if (!ctx || !settings_key) {
+		return -EFAULT;
+	}
+
+	int rc = settings_delete(settings_key);
+
+	if (rc != 0) {
+		LOG_ERR("Error %d while deleting progress for \"%s\"",
+			rc, settings_key);
+	}
+
+	return rc;
+}
+
+#endif  /* CONFIG_STREAM_FLASH_PROGRESS */
